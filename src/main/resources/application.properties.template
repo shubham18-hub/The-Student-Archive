@@ -1,0 +1,24 @@
+# Database Connection
+spring.datasource.url=jdbc:postgresql://localhost:5433/resource_engine
+spring.datasource.username=YOUR_DB_USERNAME
+spring.datasource.password=YOUR_DB_PASSWORD
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# JPA / Hibernate Settings
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.jdbc.batch_size=20
+spring.jpa.properties.hibernate.order_inserts=true
+spring.jpa.properties.hibernate.order_updates=true
+
+# Server Settings
+server.port=9090
+
+# File Path
+file.indexing.path=D:/my-pdf-db/JAVA DATABASE
+
+# GitHub OAuth2
+spring.security.oauth2.client.registration.github.client-id=YOUR_GITHUB_CLIENT_ID
+spring.security.oauth2.client.registration.github.client-secret=YOUR_GITHUB_CLIENT_SECRET
+spring.security.oauth2.client.registration.github.scope=read:user,user:email

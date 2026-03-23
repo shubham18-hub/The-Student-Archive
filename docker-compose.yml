@@ -3,11 +3,11 @@ services:
     image: pgvector/pgvector:pg16
     container_name: pdf_vector_db
     ports:
-      - "5433:5432" # We use 5433 so it doesn't clash with your existing Postgres
+      - "5433:5432"
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: pdf_vault
+      POSTGRES_USER: Javadb
+      POSTGRES_PASSWORD: 123456789
+      POSTGRES_DB: resource_engine
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

@@ -1,4 +1,9 @@
 JAVA DATABASE/
 UNSORTED_FILES/
+DUPLICATES_BACKUP/
 target/
 *.class
+*.log
+
+# Secrets - never commit these
+src/main/resources/application.properties

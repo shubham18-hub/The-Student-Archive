@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home - The Student Archive</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .search-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 0;
+        }
+        .search-box { max-width: 700px; margin: 0 auto; }
+        .result-card {
+            border-left: 5px solid #667eea;
+            margin-bottom: 15px;
+        }
+        .dept-badge {
+            background-color: #e9ecef;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/home">📚 The Student Archive</a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link active" href="/home">Home</a>
+                <span class="nav-link" sec:authorize="isAuthenticated()">
+                    👤 <span sec:authentication="principal.attributes['login']"></span>
+                </span>
+                <form th:action="@{/logout}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-outline-light btn-sm ms-2">Logout</button>
+                </form>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="search-section">
+        <div class="container">
+            <h1 class="text-center mb-4">Find Your Study Materials</h1>
+            <div class="search-box">
+                <div class="input-group input-group-lg">
+                    <input type="text" id="searchInput" class="form-control"
+                           placeholder="Search for notes, previous year questions, study materials..."
+                           onkeypress="if(event.key==='Enter') performSearch()">
+                    <button class="btn btn-light" onclick="performSearch()">🔍 Search</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container mt-5">
+        <div id="resultsContainer"></div>
+
+        <div id="quickLinks" class="row mt-4">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body text-center">
+                        <h5>📝 Notes</h5>
+                        <p>Access comprehensive study notes</p>
+                        <button class="btn btn-primary" onclick="quickSearch('notes')">Browse Notes</button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body text-center">
+                        <h5>📄 Previous Year Questions</h5>
+                        <p>Practice with past exam papers</p>
+                        <button class="btn btn-primary" onclick="quickSearch('end term')">Browse Questions</button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body text-center">
+                        <h5>📚 Mid Term Papers</h5>
+                        <p>Mid semester exam papers</p>
+                        <button class="btn btn-primary" onclick="quickSearch('mid term')">Browse Mid Terms</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function performSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            const container = document.getElementById('resultsContainer');
+            const quickLinks = document.getElementById('quickLinks');
+
+            if (!query) {
+                container.innerHTML = '<p class="text-danger text-center">Please enter a search term.</p>';
+                return;
+            }
+
+            container.innerHTML = '<p class="text-center text-muted">Searching database...</p>';
+            quickLinks.style.display = 'none';
+
+            try {
+                const response = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                container.innerHTML = '';
+
+                if (data.length === 0) {
+                    container.innerHTML = '<p class="text-center text-muted">No materials found for this query.</p>';
+                    quickLinks.style.display = 'flex';
+                    return;
+                }
+
+                data.forEach(item => {
+                    const card = document.createElement('div');
+                    card.className = 'card result-card';
+                    card.innerHTML = `
+                        <div class="card-body">
+                            <h5 class="card-title">${item.title}</h5>
+                            <p class="mb-1"><span class="dept-badge">${item.department}</span></p>
+                            <p class="mb-1 text-muted small"><strong>Path:</strong> <code>${item.file_path}</code></p>
+                            <p class="mb-0 text-muted small"><strong>Relevance:</strong> ${parseFloat(item.rank_score).toFixed(4)}</p>
+                        </div>
+                    `;
+                    container.appendChild(card);
+                });
+            } catch (error) {
+                container.innerHTML = '<p class="text-danger text-center">Error connecting to backend. Is Spring Boot running?</p>';
+                quickLinks.style.display = 'flex';
+            }
+        }
+
+        function quickSearch(term) {
+            document.getElementById('searchInput').value = term;
+            performSearch();
+        }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

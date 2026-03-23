@@ -2,8 +2,10 @@ package com.example;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 @SpringBootApplication
+@EnableJpaRepositories(basePackages = "com.example")
 public class DatabaseSetup {
     public static void main(String[] args) {
         // Spring Boot automatically connects to port 5432 using your application.properties!
