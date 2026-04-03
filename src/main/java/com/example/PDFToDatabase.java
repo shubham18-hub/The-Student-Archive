@@ -1,103 +1,114 @@
 package com.example;
 
 import java.io.File;
-import java.io.FileInputStream;
+import java.nio.file.Files;
 import java.security.MessageDigest;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+// CommandLineRunner is a Spring Boot interface.
+// Any class that implements it will have its run() method called
+// automatically when the application starts — after everything is ready.
+// This is how we automatically index all PDFs on startup.
 @Service
 public class PDFToDatabase implements CommandLineRunner {
 
+    // Spring automatically injects JdbcTemplate — we never call new JdbcTemplate()
+    // JdbcTemplate is Spring's helper for running SQL queries safely
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    // @Value reads the value from application.properties
+    // The part after : is the default value if the property is not set
+    @Value("${file.indexing.path:D:/my-pdf-db/JAVA DATABASE}")
+    private String rootPath;
+
+    // This method runs once when the app starts
     @Override
     public void run(String... args) throws Exception {
-        System.out.println("Starting bulk PDF ingestion...");
-        File rootDir = new File("D:/my-pdf-db/JAVA DATABASE");
-        
+        System.out.println("Starting PDF ingestion from: " + rootPath);
+
+        File rootDir = new File(rootPath);
+
+        // Check if the folder exists
         if (!rootDir.exists() || !rootDir.isDirectory()) {
-            System.out.println("❌ Could not find directory: D:/my-pdf-db/JAVA DATABASE");
+            System.out.println("Folder not found: " + rootPath);
             return;
         }
 
+        // Loop through each department folder (B TECH, M TECH, BBA, etc.)
         File[] deptFolders = rootDir.listFiles(File::isDirectory);
         if (deptFolders != null) {
             for (File folder : deptFolders) {
-                processDepartment(folder, folder.getName()); 
+                processDepartment(folder, folder.getName());
             }
         }
-        System.out.println("✅ All departments processed successfully!");
-        System.out.println("✅ Backend is now staying alive on the configured port.");
+
+        System.out.println("All PDFs processed.");
     }
 
-    private void processDepartment(File folder, String rootDepartment) {
+    // Recursively goes through all subfolders to find PDF files
+    private void processDepartment(File folder, String departmentName) {
         File[] files = folder.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                if (file.isDirectory()) {
-                    processDepartment(file, rootDepartment);
-                } else if (file.getName().toLowerCase().endsWith(".pdf")) {
-                    System.out.println("Processing [" + rootDepartment + "]: " + file.getName());
-                    ingestPdf(file, rootDepartment);
-                }
+        if (files == null) return;
+
+        for (File file : files) {
+            if (file.isDirectory()) {
+                // Go deeper into subfolders
+                processDepartment(file, departmentName);
+            } else if (file.getName().toLowerCase().endsWith(".pdf")) {
+                // Found a PDF — process it
+                ingestPdf(file, departmentName);
             }
         }
     }
 
+    // Reads one PDF file, extracts text, and saves to database (skips duplicates via content_hash)
     private void ingestPdf(File file, String department) {
         try {
-            // 1. Calculate SHA-256 Hash
+            // Compute SHA-256 hash of the file bytes to detect duplicates
+            byte[] fileBytes = Files.readAllBytes(file.toPath());
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (FileInputStream fis = new FileInputStream(file)) {
-                byte[] byteArray = new byte[1024];
-                int bytesCount;
-                while ((bytesCount = fis.read(byteArray)) != -1) {
-                    digest.update(byteArray, 0, bytesCount);
-                }
-            }
-            
-            byte[] bytes = digest.digest();
+            byte[] hashBytes = digest.digest(fileBytes);
             StringBuilder sb = new StringBuilder();
-            for (byte aByte : bytes) {
-                sb.append(Integer.toString((aByte & 0xff) + 0x100, 16).substring(1));
-            }
+            for (byte b : hashBytes) sb.append(String.format("%02x", b));
             String contentHash = sb.toString();
 
-            // 2. Extract text using PDFBox
-            String cleanText = "";
+            // Skip if this exact file was already indexed
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM academic_materials WHERE content_hash = ?",
+                Integer.class, contentHash);
+            if (count != null && count > 0) {
+                System.out.println("  Skipped (duplicate): " + file.getName());
+                return;
+            }
+
+            // Extract text from the PDF using Apache PDFBox
+            String extractedText = "";
             try (PDDocument document = PDDocument.load(file)) {
                 PDFTextStripper stripper = new PDFTextStripper();
                 String rawText = stripper.getText(document);
-                cleanText = (rawText != null) ? rawText.replace("\0", " ") : "";
+                extractedText = (rawText != null) ? rawText.replace("\0", " ") : "";
             }
-            
+
             String title = file.getName().replace(".pdf", "");
+            // Limit text to 10000 characters — PostgreSQL GIN index has a size limit
+            String safeText = extractedText.substring(0, Math.min(extractedText.length(), 10000));
 
-            // 3. Truncate text to avoid PostgreSQL Index Row Limit (8191 bytes)
-            String safeText = cleanText.substring(0, Math.min(cleanText.length(), 10000));
+            String sql = "INSERT INTO academic_materials (title, department, file_path, content_hash, document_vector) "
+                       + "VALUES (?, ?, ?, ?, to_tsvector('english', CAST(? AS TEXT)))";
 
-            // 4. Insert into Database
-            String sql = "INSERT INTO academic_materials (title, department, file_path, content_hash, document_vector) " +
-                         "VALUES (?, ?, ?, ?, to_tsvector('english', CAST(? AS TEXT))) " +
-                         "ON CONFLICT (content_hash) DO NOTHING";
-
-            int rowsAffected = jdbcTemplate.update(sql, title, department, file.getAbsolutePath(), contentHash, safeText);
-            
-            if (rowsAffected > 0) {
-                System.out.println("   -> SUCCESS: Added to database.");
-            } else {
-                System.out.println("   -> SKIPPED: Duplicate content already exists.");
-            }
+            jdbcTemplate.update(sql, title, department, file.getAbsolutePath(), contentHash, safeText);
+            System.out.println("  Added: " + title);
 
         } catch (Exception e) {
-            System.out.println("   -> ❌ Error processing " + file.getName() + ": " + e.getMessage());
+            System.out.println("  Error with file " + file.getName() + ": " + e.getMessage());
         }
     }
-} // Final closing brace for the class
+}

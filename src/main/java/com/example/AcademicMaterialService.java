@@ -1,10 +1,15 @@
 package com.example;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import java.io.IOException;
-import java.nio.file.*;
-import java.util.List;
+
+// @Service marks this as a business logic class
 
 @Service
 public class AcademicMaterialService {
@@ -12,40 +17,42 @@ public class AcademicMaterialService {
     @Autowired
     private AcademicMaterialRepository repository;
 
-   public String renameFilesBySubject() {
-    List<AcademicMaterial> materials = repository.findAll();
-    int successCount = 0;
-    int failCount = 0;
+    // Renames a single file on disk and updates the path in the database
+    public void renameFile(Long id, String newName) throws IOException {
+        
+        // findById returns Optional<AcademicMaterial>
+        // orElseThrow means: if not found, throw an error instead of returning null
+        AcademicMaterial material = repository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Material not found with id: " + id));
 
-    for (AcademicMaterial item : materials) {
-        // 1. Convert DB path to a normalized Java Path
-        String dbPath = item.getFilePath().replace("\\", "/"); 
-        Path sourcePath = Paths.get(dbPath).toAbsolutePath().normalize();
+        // Java NIO (New I/O) — modern way to work with files
+        Path source = Paths.get(material.getFilePath()); // current file location
+        Path target = source.resolveSibling(newName);    // same folder, new name
 
-        // 2. Debug Log: See what Java is actually looking for
-        System.out.println("🔍 Checking path: " + sourcePath.toString());
+        // Move/rename the file on disk
+        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
 
-        if (Files.exists(sourcePath)) {
-            try {
-                String cleanTitle = item.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-                String newFileName = cleanTitle + "_" + item.getId() + ".pdf";
-                Path targetPath = sourcePath.resolveSibling(newFileName);
+        // Update the path in the database to match the new file location
+        material.setFilePath(target.toString());
+        repository.save(material); // save() does UPDATE if the record already exists
+    }
 
-                Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+    // Renames all files — removes special characters from filenames
+    public void renameAllFiles() throws IOException {
+        for (AcademicMaterial material : repository.findAll()) {
+            Path path = Paths.get(material.getFilePath());
+            String originalName = path.getFileName().toString();
 
-                // Update DB with the new normalized path
-                item.setFilePath(targetPath.toString().replace("\\", "/"));
-                repository.save(item);
-                successCount++;
-            } catch (IOException e) {
-                System.err.println("❌ Move failed: " + e.getMessage());
-                failCount++;
+            // Replace any character that is not a letter, number, dot, dash, or underscore
+            String cleanName = originalName.replaceAll("[^a-zA-Z0-9._\\-]", "_");
+
+            if (!cleanName.equals(originalName)) {
+                Path newPath = path.resolveSibling(cleanName);
+                Files.move(path, newPath, StandardCopyOption.REPLACE_EXISTING);
+                material.setFilePath(newPath.toString());
+                repository.save(material);
+                System.out.println("Renamed: " + originalName + " -> " + cleanName);
             }
-        } else {
-            System.err.println("⚠️ Still Not Found: " + sourcePath.toString());
-            failCount++;
         }
     }
-    return "Result -> Success: " + successCount + " | Failed: " + failCount;
-}
 }

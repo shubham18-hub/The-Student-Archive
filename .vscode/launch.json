@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-DatabaseSetup<my-pdf-db>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.example.DatabaseSetup",
+            "projectName": "my-pdf-db",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "type": "java",
+            "name": "Spring Boot-AcademicSearchUI<my-pdf-db>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.example.ui.AcademicSearchUI",
+            "projectName": "my-pdf-db",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

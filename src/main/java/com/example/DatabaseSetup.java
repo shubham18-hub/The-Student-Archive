@@ -2,14 +2,16 @@ package com.example;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
+// This is the starting point of our Spring Boot application.
+// @SpringBootApplication tells Spring Boot to:
+//   1. Scan all classes in this package for @Service, @Controller, @Repository
+//   2. Auto-configure everything (database, server, security)
 @SpringBootApplication
-@EnableJpaRepositories(basePackages = "com.example")
 public class DatabaseSetup {
+
     public static void main(String[] args) {
-        // Spring Boot automatically connects to port 5432 using your application.properties!
+        // This one line starts the entire application
         SpringApplication.run(DatabaseSetup.class, args);
-        System.out.println("✅ Academic Resource Search Engine Backend is Running!");
     }
 }

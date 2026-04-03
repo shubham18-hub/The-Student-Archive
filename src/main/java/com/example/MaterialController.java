@@ -2,20 +2,26 @@ package com.example;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+// Admin endpoint — only for management operations
 
 @RestController
-@RequestMapping("/api")
-@CrossOrigin(origins = "*") // FIX: Prevents UI from being blocked
+@RequestMapping("/api/admin")
 public class MaterialController {
 
     @Autowired
-    private AcademicMaterialService materialService;
+    private AcademicMaterialService service;
 
-    // Admin Task: Run this once to rename everything
-    @GetMapping("/admin/rename-all")
+    @PostMapping("/rename-all")
     public ResponseEntity<String> renameAll() {
-        String result = materialService.renameFilesBySubject();
-        return ResponseEntity.ok(result);
+        try {
+            service.renameAllFiles();
+            return ResponseEntity.ok("All files renamed successfully");
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Error: " + e.getMessage());
+        }
     }
 }
