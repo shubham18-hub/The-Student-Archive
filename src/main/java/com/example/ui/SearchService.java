@@ -1,72 +1,100 @@
 package com.example.ui;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import com.example.nlp.NLPQueryProcessor;
 
-// SearchService handles all database queries for the Swing desktop UI.
+import java.sql.*;
+import java.util.*;
+
+/**
+ * Handles all DB queries for the Swing UI.
+ *
+ * searchMaterials() now runs the raw query through NLPQueryProcessor
+ * before hitting PostgreSQL, giving synonym expansion + stemming.
+ *
+ * searchRaw() bypasses NLP — used when the user explicitly wants exact match.
+ */
 public class SearchService {
 
-    // Searches for academic materials matching the search term'
-    public static List<Map<String, String>> searchMaterials(String searchTerm) {
-        // We store results as a List of Maps
-        // Each Map represents one row: {"id"="1", "title"="Civil Exam", "department"="B TECH"}
+    /**
+     * NLP-enhanced search.
+     * Expands the query with synonyms and stems, then runs to_tsquery.
+     */
+    public static List<Map<String, String>> searchMaterials(String rawQuery) {
+        String nlpQuery = NLPQueryProcessor.process(rawQuery);
+        System.out.println(NLPQueryProcessor.explain(rawQuery));
+        return runSearch(nlpQuery, rawQuery);
+    }
+
+    /**
+     * Exact / raw search — bypasses NLP expansion.
+     * Falls back to plainto_tsquery for safety.
+     */
+    public static List<Map<String, String>> searchRaw(String rawQuery) {
+        return runSearch(null, rawQuery);
+    }
+
+    /**
+     * Core search method.
+     *
+     * @param nlpQuery  pre-processed tsquery string (null = use plainto_tsquery)
+     * @param rawQuery  original user input (used as fallback and for logging)
+     */
+    private static List<Map<String, String>> runSearch(String nlpQuery, String rawQuery) {
         List<Map<String, String>> results = new ArrayList<>();
 
-        // plainto_tsquery converts "civil engineering" into a search query
-        // document_vector @@ query checks if the document matches
-        // ts_rank gives a relevance score — higher means more relevant
+        // If NLP produced a valid expanded query, use to_tsquery (supports | and &)
+        // Otherwise fall back to plainto_tsquery which is more forgiving
+        boolean useNlp = nlpQuery != null && !nlpQuery.isBlank();
+
+        String queryExpr = useNlp
+            ? "to_tsquery('english', ?)"
+            : "plainto_tsquery('english', ?)";
+
         String sql = "SELECT id, title, department, file_path "
                    + "FROM academic_materials "
-                   + "WHERE document_vector @@ plainto_tsquery('english', ?) "
-                   + "ORDER BY ts_rank(document_vector, plainto_tsquery('english', ?)) DESC "
-                   + "LIMIT 50";
+                   + "WHERE document_vector @@ " + queryExpr + " "
+                   + "ORDER BY ts_rank(document_vector, " + queryExpr + ") DESC "
+                   + "LIMIT 100";
 
-        
+        String param = useNlp ? nlpQuery : rawQuery;
+
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
-            // Set the ? placeholders — this prevents SQL injection attacks
-            // PreparedStatement treats it as plain text, not SQL code
-            stmt.setString(1, searchTerm);
-            stmt.setString(2, searchTerm);
+            stmt.setString(1, param);
+            stmt.setString(2, param);
 
-            ResultSet rs = stmt.executeQuery();
-
-            // Loop through each result row
-            while (rs.next()) {
-                Map<String, String> row = new HashMap<>();
-                row.put("id", rs.getString("id"));
-                row.put("title", rs.getString("title"));
-                row.put("department", rs.getString("department"));
-                row.put("file_path", rs.getString("file_path"));
-                results.add(row);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, String> row = new HashMap<>();
+                    row.put("id",         rs.getString("id"));
+                    row.put("title",      rs.getString("title"));
+                    row.put("department", rs.getString("department"));
+                    row.put("file_path",  rs.getString("file_path"));
+                    results.add(row);
+                }
             }
-            rs.close();
 
-            System.out.println("Search found " + results.size() + " results for: " + searchTerm);
+            System.out.println("Found " + results.size() + " results for: " + rawQuery);
 
         } catch (SQLException e) {
-            System.out.println("Search failed: " + e.getMessage());
+            System.out.println("Search failed (NLP query: " + param + "): " + e.getMessage());
+
+            // If NLP-expanded query fails (e.g. bad tsquery syntax), retry with plain query
+            if (useNlp) {
+                System.out.println("Retrying with plain query...");
+                return runSearch(null, rawQuery);
+            }
         }
 
         return results;
     }
 
-    // Loads the  recently added materials 
     public static List<Map<String, String>> getAllMaterials() {
         List<Map<String, String>> results = new ArrayList<>();
 
         String sql = "SELECT id, title, department, file_path "
-                   + "FROM academic_materials "
-                   + "ORDER BY created_at DESC "
-                   + "LIMIT 100";
+                   + "FROM academic_materials ORDER BY created_at DESC LIMIT 100";
 
         try (Connection conn = DatabaseConnection.getConnection();
              Statement stmt = conn.createStatement();
@@ -74,10 +102,10 @@ public class SearchService {
 
             while (rs.next()) {
                 Map<String, String> row = new HashMap<>();
-                row.put("id", rs.getString("id"));
-                row.put("title", rs.getString("title"));
+                row.put("id",         rs.getString("id"));
+                row.put("title",      rs.getString("title"));
                 row.put("department", rs.getString("department"));
-                row.put("file_path", rs.getString("file_path"));
+                row.put("file_path",  rs.getString("file_path"));
                 results.add(row);
             }
 
@@ -88,25 +116,16 @@ public class SearchService {
         return results;
     }
 
-    // Returns the total number of PDFs stored in the database
-    // Shown in the status bar at the bottom of the Swing window
     public static int countMaterials() {
-        String sql = "SELECT COUNT(*) AS total FROM academic_materials";
-
         try (Connection conn = DatabaseConnection.getConnection();
              Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM academic_materials")) {
 
-            if (rs.next()) {
-                return rs.getInt("total");
-            }
+            if (rs.next()) return rs.getInt(1);
 
         } catch (SQLException e) {
-            System.out.println("Failed to count materials: " + e.getMessage());
+            System.out.println("Failed to count: " + e.getMessage());
         }
-
         return 0;
     }
-
-
 }

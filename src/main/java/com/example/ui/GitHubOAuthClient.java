@@ -1,92 +1,62 @@
 package com.example.ui;
 
-import java.awt.Desktop;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URL;
-import java.net.URLDecoder;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-
+import com.example.auth.TokenManager;
 import com.sun.net.httpserver.HttpExchange;
 
-// Handles the GitHub OAuth2 login flow for the Swing desktop app.
+import java.awt.Desktop;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.regex.*;
 
+// Handles the GitHub OAuth2 login flow — opens the browser, waits for the callback, fetches the user profile
 public class GitHubOAuthClient {
 
-    // GitHub OAuth App credentials — registered at github.com/settings/developers
-    private static final String CLIENT_ID = "Ov23liERCYVAAMavkPmf";
+    private static final String CLIENT_ID     = "Ov23liERCYVAAMavkPmf";
     private static final String CLIENT_SECRET = "b66ef775def922da7c4eaeb4d2a6a1fed335898d";
-    private static final String REDIRECT_URI = "http://localhost:8888/callback";
-
-    // GitHub API URLs
+    private static final String REDIRECT_URI  = "http://localhost:8888/callback";
     private static final String AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
-    private static final String TOKEN_URL = "https://github.com/login/oauth/access_token";
-    private static final String USER_API_URL = "https://api.github.com/user";
+    private static final String TOKEN_URL     = "https://github.com/login/oauth/access_token";
+    private static final String USER_API_URL  = "https://api.github.com/user";
+    private static final int    CALLBACK_PORT = 8888;
+    private static final long   TIMEOUT_SECS  = 300;
 
-    private static final int CALLBACK_PORT = 8888;
-    private static final long TIMEOUT_SECONDS = 300; // 5 minutes for user to authorize
-
-    // Starts the OAuth2 flow and returns a CompletableFuture.
-    
     public static CompletableFuture<GitHubUserProfile> authorize() {
         CompletableFuture<GitHubUserProfile> result = new CompletableFuture<>();
 
         try {
-            // Start the local server to catch GitHub's redirect
             LocalOAuthServer server = new LocalOAuthServer(CALLBACK_PORT);
 
-            // Run the OAuth flow in a separate thread so the UI doesn't freeze
             new Thread(() -> {
                 try {
-                    // Wait for GitHub to redirect back to our local server
-                    HttpExchange exchange = server.waitForCallback(TIMEOUT_SECONDS);
+                    HttpExchange exchange = server.waitForCallback(TIMEOUT_SECS);
 
-                    // Extract the "code" from the URL: /callback?code=XXXX
-                    String queryString = exchange.getRequestURI().getQuery();
-                    Map<String, String> params = parseQueryString(queryString);
+                    Map<String, String> params = parseQueryString(exchange.getRequestURI().getQuery());
                     String code = params.get("code");
 
-                    // Send a success page to the browser
-                    server.sendResponse(exchange, 200, getSuccessHtml());
+                    server.sendResponse(exchange, 200, successHtml());
                     server.close();
 
                     if (code == null) {
-                        result.completeExceptionally(new Exception("No code received from GitHub"));
+                        result.completeExceptionally(new Exception("No code from GitHub"));
                         return;
                     }
 
-                    System.out.println("Got authorization code from GitHub");
-
-                    // Step 4: Exchange the code for an access token
-                    String accessToken = exchangeCodeForToken(code);
-                    if (accessToken == null || accessToken.isEmpty()) {
+                    String token = exchangeCodeForToken(code);
+                    if (token == null || token.isEmpty()) {
                         result.completeExceptionally(new Exception("Failed to get access token"));
                         return;
                     }
 
-                    System.out.println("Got access token from GitHub");
-
-                    // Step 5: Use the token to get the user's profile
-                    GitHubUserProfile profile = fetchUserProfile(accessToken);
+                    GitHubUserProfile profile = fetchUserProfile(token);
                     if (profile == null) {
-                        result.completeExceptionally(new Exception("Failed to get user profile"));
+                        result.completeExceptionally(new Exception("Failed to fetch user profile"));
                         return;
                     }
 
-                    profile.setAccessToken(accessToken);
-                    System.out.println("Logged in as: @" + profile.getLogin());
-
-                    // Complete the future — the SwingWorker's .get() will now return
+                    profile.setAccessToken(token);
                     result.complete(profile);
 
                 } catch (Exception e) {
@@ -94,13 +64,11 @@ public class GitHubOAuthClient {
                 }
             }).start();
 
-            // Step 1: Build the GitHub authorization URL and open it in the browser
             String authUrl = AUTHORIZE_URL
                 + "?client_id=" + CLIENT_ID
                 + "&redirect_uri=" + URLEncoder.encode(REDIRECT_URI, "UTF-8")
                 + "&scope=user:email,read:user";
 
-            System.out.println("Opening GitHub login in browser...");
             Desktop.getDesktop().browse(new URI(authUrl));
 
         } catch (Exception e) {
@@ -110,131 +78,90 @@ public class GitHubOAuthClient {
         return result;
     }
 
-    // Step 4: Sends the code to GitHub and gets back an access token
-    // This is a server-to-server POST request — the user never sees this
     private static String exchangeCodeForToken(String code) {
         try {
-            // Build the POST request body
-            String requestBody = "client_id=" + CLIENT_ID
+            String body = "client_id=" + CLIENT_ID
                 + "&client_secret=" + CLIENT_SECRET
                 + "&code=" + code
                 + "&redirect_uri=" + URLEncoder.encode(REDIRECT_URI, "UTF-8");
 
-            // Open a connection to GitHub's token endpoint
-            HttpURLConnection conn = (HttpURLConnection) new URL(TOKEN_URL).openConnection();
+            HttpURLConnection conn = (HttpURLConnection) new URI(TOKEN_URL).toURL().openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setDoOutput(true); // allow sending a request body
+            conn.setDoOutput(true);
 
-            // Write the request body
             try (OutputStream os = conn.getOutputStream()) {
-                os.write(requestBody.getBytes(StandardCharsets.UTF_8));
+                os.write(body.getBytes(StandardCharsets.UTF_8));
             }
 
-            if (conn.getResponseCode() != 200) {
-                System.out.println("Token exchange failed: HTTP " + conn.getResponseCode());
-                return null;
-            }
-
-            // Read the response and extract the access_token field
-            String response = readStream(conn.getInputStream());
-            return extractJsonField(response, "access_token");
+            if (conn.getResponseCode() != 200) return null;
+            return extractJsonField(readStream(conn.getInputStream()), "access_token");
 
         } catch (Exception e) {
-            System.out.println("Error getting token: " + e.getMessage());
+            System.out.println("Token exchange failed: " + e.getMessage());
             return null;
         }
     }
 
-    // Step 5: Calls the GitHub API to get the user's profile information
-    private static GitHubUserProfile fetchUserProfile(String accessToken) {
+    private static GitHubUserProfile fetchUserProfile(String token) {
         try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(USER_API_URL).openConnection();
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+            HttpURLConnection conn = (HttpURLConnection) new URI(USER_API_URL).toURL().openConnection();
+            conn.setRequestProperty("Authorization", "Bearer " + token);
             conn.setRequestProperty("Accept", "application/json");
 
-            if (conn.getResponseCode() != 200) {
-                System.out.println("User API failed: HTTP " + conn.getResponseCode());
-                return null;
-            }
+            if (conn.getResponseCode() != 200) return null;
 
-            String response = readStream(conn.getInputStream());
-
-            // Parse the JSON response and fill a GitHubUserProfile object
+            String json = readStream(conn.getInputStream());
             GitHubUserProfile profile = new GitHubUserProfile();
-            profile.setId(extractJsonField(response, "id"));
-            profile.setLogin(extractJsonField(response, "login"));
-            profile.setName(extractJsonField(response, "name"));
-            profile.setAvatarUrl(extractJsonField(response, "avatar_url"));
-            profile.setProfileUrl(extractJsonField(response, "html_url"));
-            profile.setEmail(extractJsonField(response, "email"));
-            profile.setBio(extractJsonField(response, "bio"));
-
+            profile.setId(extractJsonField(json, "id"));
+            profile.setLogin(extractJsonField(json, "login"));
+            profile.setName(extractJsonField(json, "name"));
+            profile.setAvatarUrl(extractJsonField(json, "avatar_url"));
+            profile.setProfileUrl(extractJsonField(json, "html_url"));
+            profile.setEmail(extractJsonField(json, "email"));
+            profile.setBio(extractJsonField(json, "bio"));
             return profile;
 
         } catch (Exception e) {
-            System.out.println("Error fetching profile: " + e.getMessage());
+            System.out.println("Profile fetch failed: " + e.getMessage());
             return null;
         }
     }
 
-    // Deletes the saved token — called when user clicks Logout
     public static void logout() {
-        com.example.auth.TokenManager.deleteToken();
-        System.out.println("User logged out");
+        TokenManager.deleteToken();
     }
 
-    // Converts a URL query string like "code=abc&state=123" into a Map
     private static Map<String, String> parseQueryString(String query) {
         Map<String, String> params = new HashMap<>();
         if (query == null || query.isEmpty()) return params;
-
         for (String part : query.split("&")) {
-            String[] keyValue = part.split("=", 2);
-            if (keyValue.length == 2) {
-                try {
-                    params.put(keyValue[0], URLDecoder.decode(keyValue[1], "UTF-8"));
-                } catch (UnsupportedEncodingException e) {
-                    // ignore
-                }
+            String[] kv = part.split("=", 2);
+            if (kv.length == 2) {
+                try { params.put(kv[0], URLDecoder.decode(kv[1], "UTF-8")); }
+                catch (UnsupportedEncodingException ignored) {}
             }
         }
         return params;
     }
 
-    // Extracts a value from a JSON string using regex
-    // Example: extractJsonField({"login":"shubham"}, "login") returns "shubham"
-    private static String extractJsonField(String json, String fieldName) {
-        String pattern = "\"" + fieldName + "\"\\s*:\\s*\"([^\"]*)\"";
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(pattern).matcher(json);
-        if (matcher.find()) {
-            return matcher.group(1)
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\");
-        }
-        return "";
+    private static String extractJsonField(String json, String field) {
+        Matcher m = Pattern.compile("\"" + field + "\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
+        return m.find() ? m.group(1).replace("\\\"", "\"").replace("\\\\", "\\") : "";
     }
 
-    // Reads all text from an InputStream and returns it as a String
     private static String readStream(InputStream stream) throws IOException {
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
+            while ((line = r.readLine()) != null) sb.append(line);
         }
         return sb.toString();
     }
 
-    // The HTML page shown in the browser after successful authorization
-    private static String getSuccessHtml() {
+    private static String successHtml() {
         return "<!DOCTYPE html><html><body style='font-family:Arial;text-align:center;padding:50px'>"
-             + "<h1>Login Successful!</h1>"
-             + "<p>You can close this tab and return to the application.</p>"
-             + "</body></html>";
+             + "<h2>Login successful — you can close this tab.</h2></body></html>";
     }
 }

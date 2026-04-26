@@ -1,172 +1,204 @@
 package com.example.ui;
 
-import javax.swing.*;
-import javax.swing.table.*;
-import javax.swing.border.*;
+import com.example.auth.RoleManager;
+import com.example.auth.TokenManager;
+import com.example.nlp.NLPQueryProcessor;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.util.List;
 import java.util.Map;
 
-// Main Swing desktop window for The Student Archive.
-// JFrame is the main window class in Java Swing.
-// Layout: TOP = search bar + buttons, MIDDLE = results table, BOTTOM = status bar
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.LineBorder;
+import javax.swing.table.DefaultTableModel;
+import javax.swing.table.JTableHeader;
+
+/**
+ * Main application window — The Student Archive.
+ *
+ * Role-aware UI:
+ *   GUEST  — search only, login prompt shown
+ *   USER   — search + view PDF (double-click opens embedded viewer)
+ *   ADMIN  — all of the above + "Admin Panel" button
+ *
+ * NLP search:
+ *   Queries are expanded via NLPQueryProcessor before hitting PostgreSQL.
+ *   A "Raw Search" checkbox bypasses NLP for exact matching.
+ *
+ * PDF Viewer:
+ *   Double-clicking a result opens PDFViewerWindow (embedded, no external app).
+ */
 public class AcademicSearchUI extends JFrame {
 
-    private JTextField searchField;
-    private JButton searchButton;
-    private JButton refreshButton;
-    private JButton githubLoginButton;
-    private JButton logoutButton;
-    private JTable resultsTable;
+    // ── UI components ─────────────────────────────────────────────────────────
+    private JTextField    searchField;
+    private JCheckBox     rawSearchCheckbox;
+    private JButton       searchButton;
+    private JButton       refreshButton;
+    private JButton       githubLoginButton;
+    private JButton       logoutButton;
+    private JButton       adminPanelButton;
+    private JTable        resultsTable;
     private DefaultTableModel tableModel;
-    private JLabel statusLabel;
-    private JLabel countLabel;
-    private JLabel userLabel;
-    private JProgressBar progressBar;
-    private GitHubUserProfile currentUser; // null if not logged in
+    private JLabel        statusLabel;
+    private JLabel        countLabel;
+    private JLabel        userLabel;
+    private JLabel        roleLabel;
+    private JProgressBar  progressBar;
 
+    // ── State ─────────────────────────────────────────────────────────────────
+    private GitHubUserProfile currentUser;
+
+    // ── Entry point ───────────────────────────────────────────────────────────
     public static void main(String[] args) {
-        // invokeLater ensures the window is created on the correct Swing thread
-        SwingUtilities.invokeLater(() -> new AcademicSearchUI());
+        SwingUtilities.invokeLater(AcademicSearchUI::new);
     }
 
     public AcademicSearchUI() {
         setTitle("The Student Archive");
-        setSize(1200, 750);
+        setSize(1200, 780);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setLocationRelativeTo(null); // center on screen
-
-        createUI();
+        setLocationRelativeTo(null);
+        buildUI();
         setVisible(true);
 
-        // Auto-login: check if user was logged in before (token saved on disk)
-        GitHubUserProfile savedProfile = com.example.auth.TokenManager.loadProfile();
-        if (savedProfile != null) {
-            currentUser = savedProfile;
-            githubLoginButton.setVisible(false);
-            logoutButton.setVisible(true);
-            userLabel.setText("Logged in as: " + savedProfile.getLogin());
+        // Restore previous session if a saved token exists
+        GitHubUserProfile saved = TokenManager.loadProfile();
+        if (saved != null) {
+            applyLogin(saved);
         }
 
         loadInitialData();
     }
 
-    private void createUI() {
+    // ── UI construction ───────────────────────────────────────────────────────
+    private void buildUI() {
         setLayout(new BorderLayout(10, 10));
         setBackground(Color.WHITE);
 
-        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
-        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
-        mainPanel.setBackground(Color.WHITE);
-
-        mainPanel.add(createSearchPanel(), BorderLayout.NORTH);
-        mainPanel.add(createTablePanel(), BorderLayout.CENTER);
-        mainPanel.add(createStatusPanel(), BorderLayout.SOUTH);
-
-        add(mainPanel);
+        JPanel main = new JPanel(new BorderLayout(10, 10));
+        main.setBorder(new EmptyBorder(15, 15, 15, 15));
+        main.setBackground(Color.WHITE);
+        main.add(buildSearchPanel(), BorderLayout.NORTH);
+        main.add(buildTablePanel(),  BorderLayout.CENTER);
+        main.add(buildStatusBar(),   BorderLayout.SOUTH);
+        add(main);
     }
 
-    private JPanel createSearchPanel() {
+    // ── Search panel ──────────────────────────────────────────────────────────
+    private JPanel buildSearchPanel() {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(new Color(245, 245, 245));
         panel.setBorder(new LineBorder(new Color(200, 200, 200), 1));
 
-        // Title row with login/logout buttons
-        JPanel titlePanel = new JPanel(new BorderLayout());
-        titlePanel.setOpaque(false);
-        titlePanel.setBorder(new EmptyBorder(10, 10, 5, 10));
+        panel.add(buildTitleRow());
+        panel.add(buildUserRow());
+        panel.add(buildControlsRow());
+        return panel;
+    }
 
-        JLabel titleLabel = new JLabel("The Student Archive — Academic Search");
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 16));
-        titlePanel.add(titleLabel, BorderLayout.WEST);
+    private JPanel buildTitleRow() {
+        JPanel row = new JPanel(new BorderLayout());
+        row.setOpaque(false);
+        row.setBorder(new EmptyBorder(10, 10, 5, 10));
 
-        githubLoginButton = new JButton("Login with GitHub");
-        githubLoginButton.setFont(new Font("Arial", Font.PLAIN, 11));
-        githubLoginButton.setBackground(new Color(36, 41, 46));
-        githubLoginButton.setForeground(Color.WHITE);
-        githubLoginButton.setBorderPainted(false);
-        githubLoginButton.setPreferredSize(new Dimension(150, 28));
+        JLabel title = new JLabel("The Student Archive — Academic Search");
+        title.setFont(new Font("Arial", Font.BOLD, 16));
+        row.add(title, BorderLayout.WEST);
+
+        // Auth buttons
+        githubLoginButton = makeButton("Login with GitHub", new Color(36, 41, 46), 155, 28);
         githubLoginButton.addActionListener(e -> loginWithGitHub());
 
-        logoutButton = new JButton("Logout");
-        logoutButton.setFont(new Font("Arial", Font.PLAIN, 11));
-        logoutButton.setBackground(new Color(200, 50, 50));
-        logoutButton.setForeground(Color.WHITE);
-        logoutButton.setBorderPainted(false);
-        logoutButton.setPreferredSize(new Dimension(100, 28));
-        logoutButton.setVisible(false); // hidden until user logs in
+        logoutButton = makeButton("Logout", new Color(200, 50, 50), 100, 28);
+        logoutButton.setVisible(false);
         logoutButton.addActionListener(e -> logout());
 
-        JPanel authPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-        authPanel.setOpaque(false);
-        authPanel.add(githubLoginButton);
-        authPanel.add(logoutButton);
-        titlePanel.add(authPanel, BorderLayout.EAST);
-        panel.add(titlePanel);
+        adminPanelButton = makeButton("⚙ Admin Panel", new Color(142, 68, 173), 130, 28);
+        adminPanelButton.setVisible(false);
+        adminPanelButton.addActionListener(e -> openAdminPanel());
 
-        // Username label (shown after login)
-        userLabel = new JLabel(" ");
-        userLabel.setFont(new Font("Arial", Font.ITALIC, 10));
-        userLabel.setForeground(new Color(100, 100, 100));
-        userLabel.setBorder(new EmptyBorder(0, 10, 5, 10));
-        panel.add(userLabel);
+        JPanel authRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        authRow.setOpaque(false);
+        authRow.add(adminPanelButton);
+        authRow.add(githubLoginButton);
+        authRow.add(logoutButton);
+        row.add(authRow, BorderLayout.EAST);
+        return row;
+    }
 
-        // Search bar row
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
-        controlPanel.setOpaque(false);
+    private JPanel buildUserRow() {
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
+        row.setOpaque(false);
+        row.setBorder(new EmptyBorder(0, 10, 4, 10));
 
-        controlPanel.add(new JLabel("Search:"));
+        userLabel = new JLabel("Not logged in");
+        userLabel.setFont(new Font("Arial", Font.ITALIC, 11));
+        userLabel.setForeground(new Color(120, 120, 120));
+
+        roleLabel = new JLabel("");
+        roleLabel.setFont(new Font("Arial", Font.BOLD, 11));
+        roleLabel.setOpaque(true);
+        roleLabel.setBorder(new EmptyBorder(2, 6, 2, 6));
+        roleLabel.setVisible(false);
+
+        row.add(userLabel);
+        row.add(roleLabel);
+        return row;
+    }
+
+    private JPanel buildControlsRow() {
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+        row.setOpaque(false);
+
+        row.add(new JLabel("Search:"));
 
         searchField = new JTextField(40);
         searchField.setFont(new Font("Arial", Font.PLAIN, 12));
         searchField.setPreferredSize(new Dimension(400, 35));
-        // Press Enter to search
         searchField.addKeyListener(new KeyAdapter() {
-            @Override
-            public void keyPressed(KeyEvent e) {
+            @Override public void keyPressed(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_ENTER) performSearch();
             }
         });
-        controlPanel.add(searchField);
+        row.add(searchField);
 
-        searchButton = new JButton("Search");
+        searchButton = makeButton("Search", new Color(41, 128, 185), 100, 35);
         searchButton.setFont(new Font("Arial", Font.BOLD, 12));
-        searchButton.setBackground(new Color(41, 128, 185));
-        searchButton.setForeground(Color.WHITE);
-        searchButton.setBorderPainted(false);
-        searchButton.setPreferredSize(new Dimension(100, 35));
         searchButton.addActionListener(e -> performSearch());
-        controlPanel.add(searchButton);
+        row.add(searchButton);
 
-        refreshButton = new JButton("Refresh");
+        refreshButton = makeButton("Refresh", new Color(46, 204, 113), 100, 35);
         refreshButton.setFont(new Font("Arial", Font.BOLD, 12));
-        refreshButton.setBackground(new Color(46, 204, 113));
-        refreshButton.setForeground(Color.WHITE);
-        refreshButton.setBorderPainted(false);
-        refreshButton.setPreferredSize(new Dimension(100, 35));
         refreshButton.addActionListener(e -> loadInitialData());
-        controlPanel.add(refreshButton);
+        row.add(refreshButton);
 
-        panel.add(controlPanel);
-        return panel;
+        rawSearchCheckbox = new JCheckBox("Exact (no NLP)");
+        rawSearchCheckbox.setFont(new Font("Arial", Font.PLAIN, 11));
+        rawSearchCheckbox.setOpaque(false);
+        rawSearchCheckbox.setToolTipText("Bypass NLP expansion — search for exact words only");
+        row.add(rawSearchCheckbox);
+
+        return row;
     }
 
-    private JPanel createTablePanel() {
-        JPanel panel = new JPanel(new BorderLayout(10, 10));
+    // ── Results table ─────────────────────────────────────────────────────────
+    private JPanel buildTablePanel() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBackground(Color.WHITE);
 
-        JLabel label = new JLabel("Search Results");
+        JLabel label = new JLabel("Search Results  (double-click to open PDF)");
         label.setFont(new Font("Arial", Font.BOLD, 12));
         panel.add(label, BorderLayout.NORTH);
 
-        // Table columns — no Rank column
-        String[] columns = {"ID", "Title", "Department", "File Path"};
-        tableModel = new DefaultTableModel(new Object[][]{}, columns) {
-            @Override
-            public boolean isCellEditable(int row, int col) {
-                return false; // table is read-only
-            }
+        tableModel = new DefaultTableModel(
+            new Object[][]{},
+            new String[]{"ID", "Title", "Department", "File Path"}
+        ) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
         };
 
         resultsTable = new JTable(tableModel);
@@ -174,25 +206,33 @@ public class AcademicSearchUI extends JFrame {
         resultsTable.setFont(new Font("Arial", Font.PLAIN, 11));
         resultsTable.setGridColor(new Color(220, 220, 220));
         resultsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        resultsTable.setAutoCreateRowSorter(true); // click column header to sort
+        resultsTable.setAutoCreateRowSorter(true);
 
-        // Style the header row
         JTableHeader header = resultsTable.getTableHeader();
         header.setFont(new Font("Arial", Font.BOLD, 12));
         header.setBackground(new Color(52, 73, 94));
         header.setForeground(Color.WHITE);
 
-        // Set column widths
         int[] widths = {50, 350, 150, 600};
-        for (int i = 0; i < widths.length; i++) {
+        for (int i = 0; i < widths.length; i++)
             resultsTable.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
-        }
+
+        // Double-click → open embedded PDF viewer
+        resultsTable.addMouseListener(new MouseAdapter() {
+            @Override public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    int row = resultsTable.rowAtPoint(e.getPoint());
+                    if (row >= 0) openPDF((String) tableModel.getValueAt(row, 3));
+                }
+            }
+        });
 
         panel.add(new JScrollPane(resultsTable), BorderLayout.CENTER);
         return panel;
     }
 
-    private JPanel createStatusPanel() {
+    // ── Status bar ────────────────────────────────────────────────────────────
+    private JPanel buildStatusBar() {
         JPanel panel = new JPanel(new BorderLayout(10, 5));
         panel.setBorder(new EmptyBorder(8, 10, 8, 10));
         panel.setBackground(new Color(240, 240, 240));
@@ -208,34 +248,34 @@ public class AcademicSearchUI extends JFrame {
 
         progressBar = new JProgressBar();
         progressBar.setVisible(false);
-        progressBar.setIndeterminate(true); // spinning animation
+        progressBar.setIndeterminate(true);
         progressBar.setPreferredSize(new Dimension(150, 20));
         panel.add(progressBar, BorderLayout.EAST);
 
         return panel;
     }
 
-    // Called when user clicks Search or presses Enter
+    // ── Search logic ──────────────────────────────────────────────────────────
     private void performSearch() {
         String query = searchField.getText().trim();
-
         if (query.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Please enter a search term.");
             return;
         }
 
-        statusLabel.setText("Status: Searching...");
+        boolean useRaw = rawSearchCheckbox.isSelected();
+        String modeLabel = useRaw ? "Exact" : "NLP";
+
+        statusLabel.setText("Status: Searching [" + modeLabel + "]...");
         progressBar.setVisible(true);
         searchButton.setEnabled(false);
 
-        // SwingWorker runs the database query in a background thread
-        // This prevents the UI from freezing while waiting for results
-        // doInBackground() runs on background thread — safe for slow operations
-        // done() runs on the UI thread — safe for updating UI components
         new SwingWorker<List<Map<String, String>>, Void>() {
             @Override
             protected List<Map<String, String>> doInBackground() {
-                return SearchService.searchMaterials(query); // runs in background
+                return useRaw
+                    ? SearchService.searchRaw(query)
+                    : SearchService.searchMaterials(query);
             }
 
             @Override
@@ -243,7 +283,14 @@ public class AcademicSearchUI extends JFrame {
                 try {
                     List<Map<String, String>> results = get();
                     displayResults(results);
-                    statusLabel.setText("Status: Found " + results.size() + " results");
+
+                    // Show NLP explanation in status bar
+                    if (!useRaw) {
+                        String nlpInfo = NLPQueryProcessor.explain(query);
+                        statusLabel.setText("Found " + results.size() + " results  |  " + nlpInfo);
+                    } else {
+                        statusLabel.setText("Status: Found " + results.size() + " results [Exact match]");
+                    }
                 } catch (Exception e) {
                     statusLabel.setText("Status: Error — " + e.getMessage());
                 } finally {
@@ -254,7 +301,6 @@ public class AcademicSearchUI extends JFrame {
         }.execute();
     }
 
-    // Loads all materials when the app starts or Refresh is clicked
     private void loadInitialData() {
         statusLabel.setText("Status: Loading...");
         progressBar.setVisible(true);
@@ -264,8 +310,6 @@ public class AcademicSearchUI extends JFrame {
             protected Void doInBackground() {
                 List<Map<String, String>> results = SearchService.getAllMaterials();
                 int total = SearchService.countMaterials();
-
-                // SwingUtilities.invokeLater updates the UI from the background thread safely
                 SwingUtilities.invokeLater(() -> {
                     displayResults(results);
                     countLabel.setText("Total: " + total + " materials in database");
@@ -277,21 +321,32 @@ public class AcademicSearchUI extends JFrame {
         }.execute();
     }
 
-    // Puts the search results into the table
     private void displayResults(List<Map<String, String>> results) {
-        tableModel.setRowCount(0); // clear old rows
-
+        tableModel.setRowCount(0);
         for (Map<String, String> row : results) {
             tableModel.addRow(new Object[]{
-                row.get("id"),
-                row.get("title"),
-                row.get("department"),
-                row.get("file_path")
+                row.get("id"), row.get("title"), row.get("department"), row.get("file_path")
             });
         }
     }
 
-    // Opens GitHub in the browser and waits for the user to authorize
+    // ── PDF viewer ────────────────────────────────────────────────────────────
+    private void openPDF(String filePath) {
+        if (filePath == null || filePath.isEmpty()) return;
+
+        java.io.File f = new java.io.File(filePath);
+        if (!f.exists()) {
+            JOptionPane.showMessageDialog(this,
+                "File not found:\n" + filePath, "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        // Open embedded viewer — no external app needed
+        new PDFViewerWindow(filePath);
+        statusLabel.setText("Status: Opened viewer for " + f.getName());
+    }
+
+    // ── Auth ──────────────────────────────────────────────────────────────────
     private void loginWithGitHub() {
         statusLabel.setText("Status: Waiting for GitHub login...");
         githubLoginButton.setEnabled(false);
@@ -299,42 +354,22 @@ public class AcademicSearchUI extends JFrame {
         new SwingWorker<GitHubUserProfile, Void>() {
             @Override
             protected GitHubUserProfile doInBackground() {
-                try {
-                    // authorize() opens the browser and waits for GitHub to redirect back
-                    // .get() blocks this background thread until login is complete
-                    return GitHubOAuthClient.authorize().get();
-                } catch (Exception e) {
-                    System.out.println("Login error: " + e.getMessage());
-                    return null;
-                }
+                try { return GitHubOAuthClient.authorize().get(); }
+                catch (Exception e) { return null; }
             }
 
             @Override
             protected void done() {
                 try {
                     GitHubUserProfile profile = get();
-
                     if (profile != null) {
-                        currentUser = profile;
-
-                        // Save token to disk so user stays logged in next time
-                        com.example.auth.TokenManager.saveToken(profile);
-
-                        // Update UI to show logged-in state
-                        githubLoginButton.setVisible(false);
-                        logoutButton.setVisible(true);
-                        userLabel.setText("Logged in as: " + profile.getDisplayName()
-                                        + " (" + profile.getLogin() + ")");
-                        statusLabel.setText("Status: Logged in successfully");
-
+                        TokenManager.saveToken(profile);
+                        applyLogin(profile);
                         JOptionPane.showMessageDialog(AcademicSearchUI.this,
-                            "Welcome, " + profile.getDisplayName() + "!",
+                            "Welcome, " + profile.getDisplayName() + "!\nRole: " + profile.getRoleLabel(),
                             "Login Successful", JOptionPane.INFORMATION_MESSAGE);
                     } else {
                         statusLabel.setText("Status: Login failed or cancelled");
-                        JOptionPane.showMessageDialog(AcademicSearchUI.this,
-                            "Login failed or was cancelled.",
-                            "Login Error", JOptionPane.ERROR_MESSAGE);
                     }
                 } catch (Exception e) {
                     statusLabel.setText("Status: Error — " + e.getMessage());
@@ -345,14 +380,66 @@ public class AcademicSearchUI extends JFrame {
         }.execute();
     }
 
-    // Clears the login state and resets the UI
+    /**
+     * Applies a logged-in profile to the UI — updates labels, shows/hides buttons
+     * based on the user's role.
+     */
+    private void applyLogin(GitHubUserProfile profile) {
+        currentUser = profile;
+
+        githubLoginButton.setVisible(false);
+        logoutButton.setVisible(true);
+
+        userLabel.setText("Logged in as: " + profile.getDisplayName() + " (" + profile.getLogin() + ")");
+
+        // Role badge
+        roleLabel.setVisible(true);
+        if (profile.isAdmin()) {
+            roleLabel.setText("  ADMIN  ");
+            roleLabel.setBackground(new Color(142, 68, 173));
+            roleLabel.setForeground(Color.WHITE);
+            adminPanelButton.setVisible(true);
+        } else {
+            roleLabel.setText("  USER  ");
+            roleLabel.setBackground(new Color(39, 174, 96));
+            roleLabel.setForeground(Color.WHITE);
+            adminPanelButton.setVisible(false);
+        }
+
+        statusLabel.setText("Status: Logged in as " + profile.getRoleLabel());
+    }
+
     private void logout() {
-        GitHubOAuthClient.logout(); // deletes the token file from disk
+        GitHubOAuthClient.logout();
         currentUser = null;
+
         githubLoginButton.setVisible(true);
         logoutButton.setVisible(false);
-        userLabel.setText(" ");
+        adminPanelButton.setVisible(false);
+        roleLabel.setVisible(false);
+        userLabel.setText("Not logged in");
         statusLabel.setText("Status: Logged out");
-        tableModel.setRowCount(0); // clear the results table
+        tableModel.setRowCount(0);
+    }
+
+    private void openAdminPanel() {
+        if (currentUser == null || !currentUser.isAdmin()) {
+            JOptionPane.showMessageDialog(this,
+                "Admin access required.", "Unauthorized", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        new AdminPanel(currentUser.getLogin());
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private JButton makeButton(String text, Color bg, int w, int h) {
+        JButton btn = new JButton(text);
+        btn.setBackground(bg);
+        btn.setForeground(Color.WHITE);
+        btn.setFont(new Font("Arial", Font.PLAIN, 11));
+        btn.setBorderPainted(false);
+        btn.setFocusPainted(false);
+        btn.setPreferredSize(new Dimension(w, h));
+        return btn;
     }
 }

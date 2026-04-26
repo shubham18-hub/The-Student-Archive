@@ -1,6 +1,10 @@
 JAVA DATABASE/
 UNSORTED_FILES/
 DUPLICATES_BACKUP/
+
+# Image-based PDFs quarantine — moved here automatically during ingestion, never synced
+_image_based/
+
 target/
 *.class
 *.log

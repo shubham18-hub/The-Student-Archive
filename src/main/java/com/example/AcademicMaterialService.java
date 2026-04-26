@@ -22,6 +22,7 @@ public class AcademicMaterialService {
         
         // findById returns Optional<AcademicMaterial>
         // orElseThrow means: if not found, throw an error instead of returning null
+        @SuppressWarnings("null")
         AcademicMaterial material = repository.findById(id)
             .orElseThrow(() -> new RuntimeException("Material not found with id: " + id));
 
